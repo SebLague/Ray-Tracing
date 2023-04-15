@@ -9,8 +9,8 @@ public class RayTracingManager : MonoBehaviour
 	public const int TriangleLimit = 1500;
 
 	[Header("Ray Tracing Settings")]
-	[SerializeField, Min(0)] int maxBounceCount = 4;
-	[SerializeField, Min(0)] int numRaysPerPixel = 2;
+	[SerializeField, Range(0, 32)] int maxBounceCount = 4;
+	[SerializeField, Range(0, 64)] int numRaysPerPixel = 2;
 	[SerializeField, Min(0)] float defocusStrength = 0;
 	[SerializeField, Min(0)] float divergeStrength = 0.3f;
 	[SerializeField, Min(0)] float focusDistance = 1;
