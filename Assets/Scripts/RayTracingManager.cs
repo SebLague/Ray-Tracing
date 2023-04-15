@@ -5,6 +5,9 @@ using static UnityEngine.Mathf;
 [ExecuteAlways, ImageEffectAllowedInSceneView]
 public class RayTracingManager : MonoBehaviour
 {
+	// Raytracer is currently *very* slow, so limit the number of triangles allowed per mesh
+	public const int TriangleLimit = 1500;
+
 	[Header("Ray Tracing Settings")]
 	[SerializeField, Min(0)] int maxBounceCount = 4;
 	[SerializeField, Min(0)] int numRaysPerPixel = 2;

@@ -6,7 +6,8 @@ public struct RayTracingMaterial
 	public enum MaterialFlag
 	{
 		None,
-		CheckerPattern
+		CheckerPattern,
+		InvisibleLight
 	}
 
 	public Color colour;

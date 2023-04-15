@@ -16,6 +16,10 @@ public class RayTracedMesh : MonoBehaviour
 
 	public MeshChunk[] GetSubMeshes()
 	{
+		if (mesh.triangles.Length / 3 > RayTracingManager.TriangleLimit)
+		{
+			throw new System.Exception($"Please use a mesh with fewer than {RayTracingManager.TriangleLimit} triangles");
+		}
 		// Split mesh into chunks (if result is not already cached)
 		if (meshFilter != null && (mesh != meshFilter.sharedMesh || localChunks == null))
 		{

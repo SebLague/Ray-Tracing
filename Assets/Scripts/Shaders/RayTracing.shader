@@ -53,6 +53,10 @@ Shader "Custom/RayTracing"
 			float SunFocus;
 			float SunIntensity;
 			
+			// Special material types
+			static const int CheckerPattern = 1;
+			static const int InvisibleLightSource = 2;
+			
 			// --- Structures ---
 			struct Ray
 			{
@@ -196,7 +200,7 @@ Shader "Custom/RayTracing"
 
 			float RandomValue(inout uint state)
 			{
-				return NextRandom(state) / 4294967295.0;
+				return NextRandom(state) / 4294967295.0; // 2^32 - 1
 			}
 
 			// Random value in normal distribution (with mean=0 and sd=1)
@@ -298,34 +302,39 @@ Shader "Custom/RayTracing"
 				float3 incomingLight = 0;
 				float3 rayColour = 1;
 
-				for (int i = 0; i <= MaxBounceCount; i ++)
+				for (int bounceIndex = 0; bounceIndex <= MaxBounceCount; bounceIndex ++)
 				{
 					HitInfo hitInfo = CalculateRayCollision(ray);
 
 					if (hitInfo.didHit)
 					{
 						RayTracingMaterial material = hitInfo.material;
+						// Handle special material types:
+						if (material.flag == CheckerPattern) 
+						{
+							float2 c = mod2(floor(hitInfo.hitPoint.xz), 2.0);
+							material.colour = c.x == c.y ? material.colour : material.emissionColour;
+						}
+						else if (material.flag == InvisibleLightSource && bounceIndex == 0)
+						{
+							ray.origin = hitInfo.hitPoint + ray.dir * 0.001;
+							continue;
+						}
+
+						// Figure out new ray position and direction
 						bool isSpecularBounce = material.specularProbability >= RandomValue(rngState);
 					
 						ray.origin = hitInfo.hitPoint;
 						float3 diffuseDir = normalize(hitInfo.normal + RandomDirection(rngState));
 						float3 specularDir = reflect(ray.dir, hitInfo.normal);
 						ray.dir = normalize(lerp(diffuseDir, specularDir, material.smoothness * isSpecularBounce));
-					
-						// Handle special material types
-						switch (material.flag)
-						{
-							case 1: // Checker pattern
-								float2 c = mod2(floor(hitInfo.hitPoint.xz), 2.0);
-								material.colour = c.x == c.y ? material.colour : material.emissionColour;
-								break;
-						}
 
+						// Update light calculations
 						float3 emittedLight = material.emissionColour * material.emissionStrength;
 						incomingLight += emittedLight * rayColour;
 						rayColour *= lerp(material.colour, material.specularColour, isSpecularBounce);
 						
-						// Roulette optimization
+						// Random early exit if ray colour is nearly 0 (can't contribute much to final result)
 						float p = max(rayColour.r, max(rayColour.g, rayColour.b));
 						if (RandomValue(rngState) >= p) {
 							break;
