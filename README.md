@@ -1,4 +1,6 @@
 # Ray-Tracing
+*Note: this is the code for the first ray-tracing episode. For the most up-to-date version, see the [main branch](https://github.com/SebLague/Ray-Tracing).*
+
 A very simple (and slow) ray tracer, coded in C# and HLSL in the Unity engine.<br>
 You can watch a video about the project [here](https://youtu.be/Qz0KTGYJtUk).
 
