@@ -1,291 +1,422 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
-using static UnityEngine.Mathf;
+using System.Collections.Generic;
+
+// This class contains some helper functions to make life a little easier working with shaders
+// (Very work-in-progress!)
+
+public enum DepthMode { None = 0, Depth16 = 16, Depth24 = 24 }
 
 public static class ShaderHelper
 {
-	public enum DepthMode { None = 0, Depth16 = 16, Depth24 = 24 }
-	public static readonly GraphicsFormat RGBA_SFloat = GraphicsFormat.R32G32B32A32_SFloat;
 
-	#region ComputeShaders
-	/// Convenience method for dispatching a compute shader.
-	/// It calculates the number of thread groups based on the number of iterations needed.
-	public static void Dispatch(ComputeShader cs, int numIterationsX, int numIterationsY = 1, int numIterationsZ = 1, int kernelIndex = 0)
-	{
-		Vector3Int threadGroupSizes = GetThreadGroupSizes(cs, kernelIndex);
-		int numGroupsX = Mathf.CeilToInt(numIterationsX / (float)threadGroupSizes.x);
-		int numGroupsY = Mathf.CeilToInt(numIterationsY / (float)threadGroupSizes.y);
-		int numGroupsZ = Mathf.CeilToInt(numIterationsZ / (float)threadGroupSizes.y);
-		cs.Dispatch(kernelIndex, numGroupsX, numGroupsY, numGroupsZ);
-	}
+    public const FilterMode defaultFilterMode = FilterMode.Bilinear;
+    public const GraphicsFormat RGBA_SFloat = GraphicsFormat.R32G32B32A32_SFloat;
+    public const GraphicsFormat defaultGraphicsFormat = RGBA_SFloat;
 
-	public static Vector3Int GetThreadGroupSizes(ComputeShader compute, int kernelIndex = 0)
-	{
-		uint x, y, z;
-		compute.GetKernelThreadGroupSizes(kernelIndex, out x, out y, out z);
-		return new Vector3Int((int)x, (int)y, (int)z);
-	}
+    /// Convenience method for dispatching a compute shader.
+    /// It calculates the number of thread groups based on the number of iterations needed.
+    public static void Dispatch(ComputeShader cs, int numIterationsX, int numIterationsY = 1, int numIterationsZ = 1, int kernelIndex = 0)
+    {
+        Vector3Int threadGroupSizes = GetThreadGroupSizes(cs, kernelIndex);
+        int numGroupsX = Mathf.CeilToInt(numIterationsX / (float)threadGroupSizes.x);
+        int numGroupsY = Mathf.CeilToInt(numIterationsY / (float)threadGroupSizes.y);
+        int numGroupsZ = Mathf.CeilToInt(numIterationsZ / (float)threadGroupSizes.z);
+        cs.Dispatch(kernelIndex, numGroupsX, numGroupsY, numGroupsZ);
+    }
 
-	// Read data in append buffer to array
-	// Note: this is very slow as it reads the data from the GPU to the CPU
-	public static T[] ReadDataFromBuffer<T>(ComputeBuffer buffer, bool isAppendBuffer)
-	{
-		int numElements = buffer.count;
-		if (isAppendBuffer)
-		{
-			// Get number of elements in append buffer
-			ComputeBuffer sizeBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.IndirectArguments);
-			ComputeBuffer.CopyCount(buffer, sizeBuffer, 0);
-			int[] bufferCountData = new int[1];
-			sizeBuffer.GetData(bufferCountData);
-			numElements = bufferCountData[0];
-			Release(sizeBuffer);
-		}
+    /// Convenience method for dispatching a compute shader.
+    /// It calculates the number of thread groups based on the size of the given texture.
+    public static void Dispatch(ComputeShader cs, RenderTexture texture, int kernelIndex = 0)
+    {
+        Vector3Int threadGroupSizes = GetThreadGroupSizes(cs, kernelIndex);
+        Dispatch(cs, texture.width, texture.height, texture.volumeDepth, kernelIndex);
+    }
 
-		// Read data from append buffer
-		T[] data = new T[numElements];
-		buffer.GetData(data);
+    public static void Dispatch(ComputeShader cs, Texture2D texture, int kernelIndex = 0)
+    {
+        Vector3Int threadGroupSizes = GetThreadGroupSizes(cs, kernelIndex);
+        Dispatch(cs, texture.width, texture.height, 1, kernelIndex);
+    }
 
-		return data;
+    public static int GetStride<T>()
+    {
+        return System.Runtime.InteropServices.Marshal.SizeOf(typeof(T));
+    }
 
-	}
-	#endregion
+    public static ComputeBuffer CreateAppendBuffer<T>(int size = 1)
+    {
+        int stride = GetStride<T>();
+        ComputeBuffer buffer = new ComputeBuffer(size, stride, ComputeBufferType.Append);
+        buffer.SetCounterValue(0);
+        return buffer;
 
-	#region Create Buffers
-
-	public static ComputeBuffer CreateAppendBuffer<T>(int capacity)
-	{
-		int stride = GetStride<T>();
-		ComputeBuffer buffer = new ComputeBuffer(capacity, stride, ComputeBufferType.Append);
-		buffer.SetCounterValue(0);
-		return buffer;
-
-	}
-
-	public static void CreateStructuredBuffer<T>(ref ComputeBuffer buffer, int count)
-	{
-		count = Mathf.Max(1, count); // cannot create 0 length buffer
-		int stride = GetStride<T>();
-		bool createNewBuffer = buffer == null || !buffer.IsValid() || buffer.count != count || buffer.stride != stride;
-		if (createNewBuffer)
-		{
-			Release(buffer);
-			buffer = new ComputeBuffer(count, stride, ComputeBufferType.Structured);
-		}
-	}
-
-	public static ComputeBuffer CreateStructuredBuffer<T>(T[] data)
-	{
-		var buffer = new ComputeBuffer(data.Length, GetStride<T>());
-		buffer.SetData(data);
-		return buffer;
-	}
-
-	public static ComputeBuffer CreateStructuredBuffer<T>(List<T> data) where T : struct
-	{
-		var buffer = new ComputeBuffer(data.Count, GetStride<T>());
-		buffer.SetData<T>(data);
-		return buffer;
-	}
-	public static int GetStride<T>() => System.Runtime.InteropServices.Marshal.SizeOf(typeof(T));
-
-	public static ComputeBuffer CreateStructuredBuffer<T>(int count)
-	{
-		return new ComputeBuffer(count, GetStride<T>());
-	}
+    }
 
 
-	// Create a compute buffer containing the given data (Note: data must be blittable)
-	public static void CreateStructuredBuffer<T>(ref ComputeBuffer buffer, T[] data) where T : struct
-	{
-		// Cannot create 0 length buffer (not sure why?)
-		int length = Max(1, data.Length);
-		// The size (in bytes) of the given data type
-		int stride = System.Runtime.InteropServices.Marshal.SizeOf(typeof(T));
-
-		// If buffer is null, wrong size, etc., then we'll need to create a new one
-		if (buffer == null || !buffer.IsValid() || buffer.count != length || buffer.stride != stride)
-		{
-			if (buffer != null) { buffer.Release(); }
-			buffer = new ComputeBuffer(length, stride, ComputeBufferType.Structured);
-		}
-
-		buffer.SetData(data);
-	}
-
-	// Create a compute buffer containing the given data (Note: data must be blittable)
-	public static void CreateStructuredBuffer<T>(ref ComputeBuffer buffer, List<T> data) where T : struct
-	{
-		// Cannot create 0 length buffer (not sure why?)
-		int length = Max(1, data.Count);
-		// The size (in bytes) of the given data type
-		int stride = System.Runtime.InteropServices.Marshal.SizeOf(typeof(T));
-
-		// If buffer is null, wrong size, etc., then we'll need to create a new one
-		if (buffer == null || !buffer.IsValid() || buffer.count != length || buffer.stride != stride)
-		{
-			if (buffer != null) { buffer.Release(); }
-			buffer = new ComputeBuffer(length, stride, ComputeBufferType.Structured);
-		}
-
-		buffer.SetData(data);
-	}
+    public static void CreateStructuredBuffer<T>(ref ComputeBuffer buffer, int count)
+    {
+        int stride = GetStride<T>();
+        bool createNewBuffer = buffer == null || !buffer.IsValid() || buffer.count != count || buffer.stride != stride;
+        if (createNewBuffer)
+        {
+            Release(buffer);
+            buffer = new ComputeBuffer(count, stride);
+        }
+    }
 
 
-	#endregion
+    public static ComputeBuffer CreateStructuredBuffer<T>(T[] data)
+    {
+        var buffer = new ComputeBuffer(data.Length, GetStride<T>());
+        buffer.SetData(data);
+        return buffer;
+    }
 
-	#region Create Textures
-	public static RenderTexture CreateRenderTexture(RenderTexture template)
-	{
-		RenderTexture renderTexture = null;
-		CreateRenderTexture(ref renderTexture, template);
-		return renderTexture;
-	}
+    public static ComputeBuffer CreateStructuredBuffer<T>(List<T> data) where T : struct
+    {
+        var buffer = new ComputeBuffer(data.Count, GetStride<T>());
+        buffer.SetData(data);
 
-	public static void InitMaterial(Shader shader, ref Material mat)
-	{
-		if (mat == null || (mat.shader != shader && shader != null))
-		{
-			if (shader == null)
-			{
-				shader = Shader.Find("Unlit/Texture");
-			}
+        return buffer;
+    }
 
-			mat = new Material(shader);
-		}
-	}
+    public static void CreateStructuredBuffer<T>(ref ComputeBuffer buffer, List<T> data) where T : struct
+    {
+        int stride = GetStride<T>();
+        bool createNewBuffer = buffer == null || !buffer.IsValid() || buffer.count != data.Count || buffer.stride != stride;
+        if (createNewBuffer)
+        {
+            Release(buffer);
+            buffer = new ComputeBuffer(data.Count, stride);
+        }
+        buffer.SetData(data);
+        // Debug.Log(buffer.IsValid());
+    }
 
-	public static RenderTexture CreateRenderTexture(int width, int height, FilterMode filterMode, GraphicsFormat format, string name = "Unnamed", DepthMode depthMode = DepthMode.None, bool useMipMaps = false)
-	{
-		RenderTexture texture = new RenderTexture(width, height, (int)depthMode);
-		texture.graphicsFormat = format;
-		texture.enableRandomWrite = true;
-		texture.autoGenerateMips = false;
-		texture.useMipMap = useMipMaps;
-		texture.Create();
+    public static ComputeBuffer CreateStructuredBuffer<T>(int count)
+    {
+        return new ComputeBuffer(count, GetStride<T>());
+    }
 
-		texture.name = name;
-		texture.wrapMode = TextureWrapMode.Clamp;
-		texture.filterMode = filterMode;
-		return texture;
-	}
+    public static void CreateStructuredBuffer<T>(ref ComputeBuffer buffer, T[] data)
+    {
+        CreateStructuredBuffer<T>(ref buffer, data.Length);
+        buffer.SetData(data);
+    }
 
-	public static void CreateRenderTexture(ref RenderTexture texture, RenderTexture template)
-	{
-		if (texture != null)
-		{
-			texture.Release();
-		}
-		texture = new RenderTexture(template.descriptor);
-		texture.enableRandomWrite = true;
-		texture.Create();
-	}
+    public static void SetBuffer(ComputeShader compute, ComputeBuffer buffer, string id, params int[] kernels)
+    {
+        for (int i = 0; i < kernels.Length; i++)
+        {
+            compute.SetBuffer(kernels[i], id, buffer);
+        }
+    }
 
-	public static bool CreateRenderTexture(ref RenderTexture texture, int width, int height, FilterMode filterMode, GraphicsFormat format, string name = "Unnamed", DepthMode depthMode = DepthMode.None, bool useMipMaps = false)
-	{
-		if (texture == null || !texture.IsCreated() || texture.width != width || texture.height != height || texture.graphicsFormat != format || texture.depth != (int)depthMode || texture.useMipMap != useMipMaps)
-		{
-			if (texture != null)
-			{
-				texture.Release();
-			}
-			texture = CreateRenderTexture(width, height, filterMode, format, name, depthMode, useMipMaps);
-			return true;
-		}
-		else
-		{
-			texture.name = name;
-			texture.wrapMode = TextureWrapMode.Clamp;
-			texture.filterMode = filterMode;
-		}
+    public static ComputeBuffer CreateAndSetBuffer<T>(T[] data, ComputeShader cs, string nameID, int kernelIndex = 0)
+    {
+        ComputeBuffer buffer = null;
+        CreateAndSetBuffer<T>(ref buffer, data, cs, nameID, kernelIndex);
+        return buffer;
+    }
 
-		return false;
-	}
+    public static void CreateAndSetBuffer<T>(ref ComputeBuffer buffer, T[] data, ComputeShader cs, string nameID, int kernelIndex = 0)
+    {
+        CreateStructuredBuffer<T>(ref buffer, data.Length);
+        buffer.SetData(data);
+        cs.SetBuffer(kernelIndex, nameID, buffer);
+    }
+
+    public static ComputeBuffer CreateAndSetBuffer<T>(int length, ComputeShader cs, string nameID, int kernelIndex = 0)
+    {
+        ComputeBuffer buffer = null;
+        CreateAndSetBuffer<T>(ref buffer, length, cs, nameID, kernelIndex);
+        return buffer;
+    }
+
+    public static void CreateAndSetBuffer<T>(ref ComputeBuffer buffer, int length, ComputeShader cs, string nameID, int kernelIndex = 0)
+    {
+        CreateStructuredBuffer<T>(ref buffer, length);
+        cs.SetBuffer(kernelIndex, nameID, buffer);
+    }
 
 
-	public static void CreateRenderTexture3D(ref RenderTexture texture, RenderTexture template)
-	{
-		CreateRenderTexture(ref texture, template);
-	}
 
-	public static void CreateRenderTexture3D(ref RenderTexture texture, int size, GraphicsFormat format, TextureWrapMode wrapMode = TextureWrapMode.Repeat, string name = "Untitled", bool mipmaps = false)
-	{
-		if (texture == null || !texture.IsCreated() || texture.width != size || texture.height != size || texture.volumeDepth != size || texture.graphicsFormat != format)
-		{
-			//Debug.Log ("Create tex: update noise: " + updateNoise);
-			if (texture != null)
-			{
-				texture.Release();
-			}
-			const int numBitsInDepthBuffer = 0;
-			texture = new RenderTexture(size, size, numBitsInDepthBuffer);
-			texture.graphicsFormat = format;
-			texture.volumeDepth = size;
-			texture.enableRandomWrite = true;
-			texture.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
-			texture.useMipMap = mipmaps;
-			texture.autoGenerateMips = false;
-			texture.Create();
-		}
-		texture.wrapMode = wrapMode;
-		texture.filterMode = FilterMode.Bilinear;
-		texture.name = name;
-	}
-	#endregion
+    /// Releases supplied buffer/s if not null
+    public static void Release(params ComputeBuffer[] buffers)
+    {
+        for (int i = 0; i < buffers.Length; i++)
+        {
+            if (buffers[i] != null)
+            {
+                buffers[i].Release();
+            }
+        }
+    }
 
-	public static ComputeBuffer CreateArgsBuffer(Mesh mesh, int numInstances)
-	{
-		const int subMeshIndex = 0;
-		uint[] args = new uint[5];
-		args[0] = (uint)mesh.GetIndexCount(subMeshIndex);
-		args[1] = (uint)numInstances;
-		args[2] = (uint)mesh.GetIndexStart(subMeshIndex);
-		args[3] = (uint)mesh.GetBaseVertex(subMeshIndex);
-		args[4] = 0; // offset
+    /// Releases supplied render textures/s if not null
+    public static void Release(params RenderTexture[] textures)
+    {
+        for (int i = 0; i < textures.Length; i++)
+        {
+            if (textures[i] != null)
+            {
+                textures[i].Release();
+            }
+        }
+    }
 
-		ComputeBuffer argsBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
-		argsBuffer.SetData(args);
-		return argsBuffer;
-	}
+    public static Vector3Int GetThreadGroupSizes(ComputeShader compute, int kernelIndex = 0)
+    {
+        uint x, y, z;
+        compute.GetKernelThreadGroupSizes(kernelIndex, out x, out y, out z);
+        return new Vector3Int((int)x, (int)y, (int)z);
+    }
 
-	// Create args buffer for instanced indirect rendering (number of instances comes from size of append buffer)
-	public static ComputeBuffer CreateArgsBuffer(Mesh mesh, ComputeBuffer appendBuffer)
-	{
-		ComputeBuffer argsBuffer = CreateArgsBuffer(mesh, 0);
-		SetArgsBufferCount(argsBuffer, appendBuffer);
-		return argsBuffer;
-	}
+    // ------ Texture Helpers ------
 
-	public static void SetArgsBufferCount(ComputeBuffer argsBuffer, ComputeBuffer appendBuffer)
-	{
-		ComputeBuffer.CopyCount(appendBuffer, argsBuffer, sizeof(uint));
-	}
+    public static RenderTexture CreateRenderTexture(RenderTexture template)
+    {
+        RenderTexture renderTexture = null;
+        CreateRenderTexture(ref renderTexture, template);
+        return renderTexture;
+    }
 
-	public static void Release(ComputeBuffer buffer)
-	{
-		if (buffer != null)
-		{
-			buffer.Release();
-		}
-	}
+    public static RenderTexture CreateRenderTexture(int width, int height, FilterMode filterMode, GraphicsFormat format, string name = "Unnamed", DepthMode depthMode = DepthMode.None, bool useMipMaps = false)
+    {
+        RenderTexture texture = new RenderTexture(width, height, (int)depthMode);
+        texture.graphicsFormat = format;
+        texture.enableRandomWrite = true;
+        texture.autoGenerateMips = false;
+        texture.useMipMap = useMipMaps;
+        texture.Create();
 
-	/// Releases supplied buffer/s if not null
-	public static void Release(params ComputeBuffer[] buffers)
-	{
-		for (int i = 0; i < buffers.Length; i++)
-		{
-			Release(buffers[i]);
-		}
-	}
+        texture.name = name;
+        texture.wrapMode = TextureWrapMode.Clamp;
+        texture.filterMode = filterMode;
+        return texture;
+    }
 
-	public static void Release(RenderTexture tex)
-	{
-		if (tex != null)
-		{
-			tex.Release();
-		}
-	}
+    public static void CreateRenderTexture(ref RenderTexture texture, RenderTexture template)
+    {
+        if (texture != null)
+        {
+            texture.Release();
+        }
+        texture = new RenderTexture(template.descriptor);
+        texture.enableRandomWrite = true;
+        texture.Create();
+    }
 
+    public static void CreateRenderTexture(ref RenderTexture texture, int width, int height)
+    {
+        CreateRenderTexture(ref texture, width, height, defaultFilterMode, defaultGraphicsFormat);
+    }
+
+
+    public static bool CreateRenderTexture(ref RenderTexture texture, int width, int height, FilterMode filterMode, GraphicsFormat format, string name = "Unnamed", DepthMode depthMode = DepthMode.None, bool useMipMaps = false)
+    {
+        if (texture == null || !texture.IsCreated() || texture.width != width || texture.height != height || texture.graphicsFormat != format || texture.depth != (int)depthMode || texture.useMipMap != useMipMaps)
+        {
+            if (texture != null)
+            {
+                texture.Release();
+            }
+            texture = CreateRenderTexture(width, height, filterMode, format, name, depthMode, useMipMaps);
+            return true;
+        }
+        else
+        {
+            texture.name = name;
+            texture.wrapMode = TextureWrapMode.Clamp;
+            texture.filterMode = filterMode;
+        }
+
+        return false;
+    }
+
+
+    public static void CreateRenderTexture3D(ref RenderTexture texture, RenderTexture template)
+    {
+        CreateRenderTexture(ref texture, template);
+    }
+
+    public static void CreateRenderTexture3D(ref RenderTexture texture, int size, GraphicsFormat format, TextureWrapMode wrapMode = TextureWrapMode.Repeat, string name = "Untitled", bool mipmaps = false)
+    {
+        if (texture == null || !texture.IsCreated() || texture.width != size || texture.height != size || texture.volumeDepth != size || texture.graphicsFormat != format)
+        {
+            //Debug.Log ("Create tex: update noise: " + updateNoise);
+            if (texture != null)
+            {
+                texture.Release();
+            }
+            const int numBitsInDepthBuffer = 0;
+            texture = new RenderTexture(size, size, numBitsInDepthBuffer);
+            texture.graphicsFormat = format;
+            texture.volumeDepth = size;
+            texture.enableRandomWrite = true;
+            texture.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
+            texture.useMipMap = mipmaps;
+            texture.autoGenerateMips = false;
+            texture.Create();
+        }
+        texture.wrapMode = wrapMode;
+        texture.filterMode = FilterMode.Bilinear;
+        texture.name = name;
+    }
+
+    // ------ Instancing Helpers
+
+    // Create args buffer for instanced indirect rendering
+    public static ComputeBuffer CreateArgsBuffer(Mesh mesh, int numInstances)
+    {
+        const int stride = sizeof(uint);
+        const int numArgs = 5;
+
+        const int subMeshIndex = 0;
+        uint[] args = new uint[numArgs];
+        args[0] = (uint)mesh.GetIndexCount(subMeshIndex);
+        args[1] = (uint)numInstances;
+        args[2] = (uint)mesh.GetIndexStart(subMeshIndex);
+        args[3] = (uint)mesh.GetBaseVertex(subMeshIndex);
+        args[4] = 0; // offset
+
+        ComputeBuffer argsBuffer = new ComputeBuffer(numArgs, stride, ComputeBufferType.IndirectArguments);
+        argsBuffer.SetData(args);
+        return argsBuffer;
+    }
+
+    public static void CreateArgsBuffer(ref ComputeBuffer argsBuffer, Mesh mesh, int numInstances)
+    {
+        const int stride = sizeof(uint);
+        const int numArgs = 5;
+
+        const int subMeshIndex = 0;
+        uint[] args = new uint[numArgs];
+        args[0] = (uint)mesh.GetIndexCount(subMeshIndex);
+        args[1] = (uint)numInstances;
+        args[2] = (uint)mesh.GetIndexStart(subMeshIndex);
+        args[3] = (uint)mesh.GetBaseVertex(subMeshIndex);
+        args[4] = 0; // offset
+
+        bool createNewBuffer = argsBuffer == null || !argsBuffer.IsValid() || argsBuffer.count != numArgs || argsBuffer.stride != stride;
+        if (createNewBuffer)
+        {
+            Release(argsBuffer);
+            argsBuffer = new ComputeBuffer(numArgs, stride, ComputeBufferType.IndirectArguments);
+        }
+        argsBuffer.SetData(args);
+
+    }
+
+    // Create args buffer for instanced indirect rendering (number of instances comes from size of append buffer)
+    public static ComputeBuffer CreateArgsBuffer(Mesh mesh, ComputeBuffer appendBuffer)
+    {
+        var buffer = CreateArgsBuffer(mesh, 0);
+        ComputeBuffer.CopyCount(appendBuffer, buffer, sizeof(uint));
+        return buffer;
+    }
+
+    // Read number of elements in append buffer
+    public static int ReadAppendBufferLength(ComputeBuffer appendBuffer)
+    {
+        ComputeBuffer countBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.Raw);
+        ComputeBuffer.CopyCount(appendBuffer, countBuffer, 0);
+
+        int[] data = new int[1];
+        countBuffer.GetData(data);
+        Release(countBuffer);
+        return data[0];
+    }
+
+    // ------ Set compute shader properties ------
+
+    public static void SetTexture(ComputeShader compute, Texture texture, string name, params int[] kernels)
+    {
+        for (int i = 0; i < kernels.Length; i++)
+        {
+            compute.SetTexture(kernels[i], name, texture);
+        }
+    }
+
+    // Set all values from settings object on the shader. Note, variable names must be an exact match in the shader.
+    // Settings object can be any class/struct containing vectors/ints/floats/bools
+    public static void SetParams(System.Object settings, ComputeShader shader, string variableNamePrefix = "", string variableNameSuffix = "")
+    {
+        var fields = settings.GetType().GetFields();
+        foreach (var field in fields)
+        {
+            var fieldType = field.FieldType;
+            string shaderVariableName = variableNamePrefix + field.Name + variableNameSuffix;
+
+            if (fieldType == typeof(UnityEngine.Vector4) || fieldType == typeof(Vector3) || fieldType == typeof(Vector2))
+            {
+                shader.SetVector(shaderVariableName, (Vector4)field.GetValue(settings));
+            }
+            else if (fieldType == typeof(int))
+            {
+                shader.SetInt(shaderVariableName, (int)field.GetValue(settings));
+            }
+            else if (fieldType == typeof(float))
+            {
+                shader.SetFloat(shaderVariableName, (float)field.GetValue(settings));
+            }
+            else if (fieldType == typeof(bool))
+            {
+                shader.SetBool(shaderVariableName, (bool)field.GetValue(settings));
+            }
+            else
+            {
+                Debug.Log($"Type {fieldType} not implemented");
+            }
+        }
+    }
+
+    // ------ MISC -------
+
+
+    // https://cmwdexint.com/2017/12/04/computeshader-setfloats/
+    public static float[] PackFloats(params float[] values)
+    {
+        float[] packed = new float[values.Length * 4];
+        for (int i = 0; i < values.Length; i++)
+        {
+            packed[i * 4] = values[i];
+        }
+        return values;
+    }
+
+    public static void LoadComputeShader(ref ComputeShader shader, string name)
+    {
+        if (shader == null)
+        {
+            shader = LoadComputeShader(name);
+        }
+    }
+
+    public static ComputeShader LoadComputeShader(string name)
+    {
+        return Resources.Load<ComputeShader>(name.Split('.')[0]);
+    }
+
+    public static void InitMaterial(Shader shader, ref Material mat)
+    {
+        if (mat == null || (mat.shader != shader && shader != null))
+        {
+            if (shader == null)
+            {
+                shader = Shader.Find("Unlit/Texture");
+            }
+
+            mat = new Material(shader);
+        }
+    }
+
+    static void LoadShader(ref Shader shader, string name)
+    {
+        if (shader == null)
+        {
+            shader = (Shader)Resources.Load(name);
+        }
+    }
 }
