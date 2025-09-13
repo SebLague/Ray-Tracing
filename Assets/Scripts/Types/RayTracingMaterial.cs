@@ -1,30 +1,39 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 [System.Serializable]
 public struct RayTracingMaterial
 {
 	public enum MaterialFlag
 	{
-		None,
+		Default,
 		CheckerPattern,
-		InvisibleLight
+		Glass
 	}
 
-	public Color colour;
-	public Color emissionColour;
-	public Color specularColour;
+	[FormerlySerializedAs("colour")]
+	public Color diffuseCol;
+	[FormerlySerializedAs("emissionColour")]
+	public Color emissionCol;
+	[FormerlySerializedAs("specularColour")]
+	public Color specularCol;
+
+	public Color absorption;
+	public float absorptionMultiplier;
 	public float emissionStrength;
 	[Range(0, 1)] public float smoothness;
 	[Range(0, 1)] public float specularProbability;
+	public float ior;
 	public MaterialFlag flag;
 
 	public void SetDefaultValues()
 	{
-		colour = Color.white;
-		emissionColour = Color.white;
+		diffuseCol = Color.white;
+		emissionCol = Color.white;
 		emissionStrength = 0;
-		specularColour = Color.white;
+		specularCol = Color.white;
 		smoothness = 0;
 		specularProbability = 1;
+		ior = 1;
 	}
 }

@@ -1,0 +1,32 @@
+#pragma kernel RayTrace
+#pragma kernel ResetAccumulated
+#include "RayCommon.hlsl"
+
+RWTexture2D<float4> FrameRender;
+RWTexture2D<float4> AccumulatedRender;
+const uint2 Resolution;
+const bool accumulate;
+
+[numthreads(8,8,1)]
+void RayTrace(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= Resolution.x || id.y >= Resolution.y) return;
+
+    float2 uv = id.xy / (Resolution - 1.0);
+    float3 pixelCol = RayTrace(uv, Resolution);
+
+    FrameRender[id.xy] = float4(pixelCol, 1);
+
+    if (accumulate)
+    {
+         AccumulatedRender[id.xy] += float4(pixelCol, 1);
+    }
+}
+
+[numthreads(8,8,1)]
+void ResetAccumulated(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= Resolution.x || id.y >= Resolution.y) return;
+
+    AccumulatedRender[id.xy] = 0;
+}
